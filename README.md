@@ -2,7 +2,7 @@
 
 ## 0. Requisitos
 
-- Docker Engine (o Docker Desktop en Windows y Linux)
+- Docker Engine (o Docker Desktop en Windows y Mac)
 - PowerBI
 - SimbaSparkODBC (Driver ODBC distribuido por Databricks)
 - Descargar https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
