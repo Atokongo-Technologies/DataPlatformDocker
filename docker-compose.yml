@@ -1,0 +1,269 @@
+services:
+  # Storage Component
+  minio:
+    image: quay.io/minio/minio
+    container_name: minio
+    hostname: minio
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    restart: always
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      # MinIO data will be saved on the Linux box under /data/minio.
+      - data_minio:/data
+    command: [ "server", "--console-address", ":9001", "/data" ]
+    networks:
+      - data_services
+  # Bucket creation for MinIO
+  # This service creates the necessary buckets in MinIO for Hive Metastore.
+  # It runs once and then exits.
+  createbuckets:
+    image: quay.io/minio/mc
+    depends_on:
+      - minio
+    restart: on-failure
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc alias set dockerminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb dockerminio/warehouse;
+      exit 0;
+      "
+    networks:
+      - data_services
+
+  # Database Component for Hive Metastore
+  # This service sets up a Postgres database to be used by Hive Metastore.
+  postgresdb:
+    image: postgres:16
+    hostname: metastore_db
+    container_name: metastore_db
+    ports:
+      - '5432:5432'
+    restart: always
+    environment:
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+      POSTGRES_DB: metastore
+    volumes:
+      # Postgres DB data will be saved on the Linux box under /data/postgres.
+      - data_postgres:/var/lib/postgresql/data
+    networks:
+      - data_services
+  # Hive Metastore Service
+  # This service runs Hive Metastore, which is used by Trino and Spark to access Delta Lake data.
+  hive-metastore:
+    image: 'starburstdata/hive:3.1.3-e.14' #3.1.2-e.18'
+    hostname: hive-metastore
+    container_name: hive-metastore
+    ports:
+      - '9083:9083'
+    restart: always
+    depends_on:
+      - postgresdb
+    environment:
+      # JDBC driver for connecting Hive Metastore to Postgres
+      HIVE_METASTORE_DRIVER: org.postgresql.Driver
+      # JDBC URL for the Postgres DB. Ensure the hostname and port match your Postgres service.
+      HIVE_METASTORE_JDBC_URL: jdbc:postgresql://metastore_db:5432/metastore
+      # Username for connecting to Postgres from Hive. Change this if you modified POSTGRES_USER.
+      HIVE_METASTORE_USER: hive
+      # Password for connecting to Postgres from Hive. Change this if you modified POSTGRES_PASSWORD.
+      HIVE_METASTORE_PASSWORD: hive
+      # Location of the Hive warehouse where Delta Lake data is stored.
+      HIVE_METASTORE_WAREHOUSE_DIR: s3a://warehouse/
+      # MinIO endpoint. Replace this with your MinIO address and port.
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      # Use path-style access. Keep this set to "true" for MinIO compatibility.
+      S3_PATH_STYLE_ACCESS: "true"
+      # The region for S3 storage. For MinIO, leave this blank.
+      REGION: ""
+      # Following fields are placeholders for integration with other cloud services like Google Cloud and Azure.
+      # These can be left blank unless you're using one of those services.      
+      GOOGLE_CLOUD_KEY_FILE_PATH: ""
+      AZURE_ADL_CLIENT_ID: ""
+      AZURE_ADL_CREDENTIAL: ""
+      AZURE_ADL_REFRESH_URL: ""
+      AZURE_ABFS_STORAGE_ACCOUNT: ""
+      AZURE_ABFS_ACCESS_KEY: ""
+      AZURE_WASB_STORAGE_ACCOUNT: ""
+      AZURE_ABFS_OAUTH: ""
+      AZURE_ABFS_OAUTH_TOKEN_PROVIDER: ""
+      AZURE_ABFS_OAUTH_CLIENT_ID: ""
+      AZURE_ABFS_OAUTH_SECRET: ""
+      AZURE_ABFS_OAUTH_ENDPOINT: ""
+      AZURE_WASB_ACCESS_KEY: ""
+      # Define Hive Metastore admin role. You can change the role if needed.
+      HIVE_METASTORE_USERS_IN_ADMIN_ROLE: "admin"
+    networks:
+      - data_services
+
+  # Spark Service - PySpark
+  # This service runs PySpark, which can be used to process Delta Lake data.
+  pyspark:
+    build:
+      context: .
+      dockerfile: Dockerfile.pyspark
+    image: custom-pyspark:3.5.0
+    container_name: pyspark
+    hostname: pyspark
+    ports:
+      - '4041:4040'
+      - '8888:8888'
+    user: root
+    restart: always
+    volumes:
+      - ./spark/jars:/home/jovyan/jars:ro
+      - ./work/:/home/jovyan/work:rw
+    depends_on:
+      - hive-metastore
+      - minio
+    environment:
+      GRANT_SUDO: yes
+      # Spark configuration for connecting to Hive Metastore
+      SPARK_MASTER: local[*]
+      SPARK_HIVE_METASTORE_URIS: thrift://hive-metastore:9083
+      SPARK_HIVE_WAREHOUSE_DIR: s3a://warehouse/
+      # MinIO configuration for Spark
+      SPARK_S3_ENDPOINT: http://minio:9000
+      SPARK_S3_ACCESS_KEY: minioadmin
+      SPARK_S3_SECRET_KEY: minioadmin
+      SPARK_S3_PATH_STYLE_ACCESS: "true"
+    networks:
+      - data_services
+
+  # Trino Coordinator Service
+  # This service runs Trino, which is used to query Delta Lake data.
+  trino-coordinator:
+    image: 'trinodb/trino:450'
+    hostname: trino-coordinator
+    container_name: trino-coordinator
+    ports:
+      - '8080:8080'
+    restart: always
+    # depends_on:
+    #   - metastore
+    volumes:
+      - ./trino/etc:/etc/trino:ro
+    networks:
+      - data_services
+
+  spark-master:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: custom-spark:3.5.0
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_LOCAL_IP=spark-master
+    ports:
+      - '4040:4040' # Spark UI port
+      - '7077:7077' # Spark master port
+      - '8081:8080' # Spark master UI port
+    networks:
+      - data_services
+    restart: always
+
+  spark-worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: custom-spark:3.5.0
+    container_name: spark-worker-1
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    networks:
+      - data_services
+    depends_on:
+      - spark-master
+
+  spark-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: custom-spark:3.5.0
+    container_name: spark-worker-2
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+    networks:
+      - data_services
+    depends_on:
+      - spark-master
+
+  # Spark Thrift Server
+  # This service runs the Spark Thrift Server, which allows SQL queries on Spark.
+  spark-thriftserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: custom-spark:3.5.0
+    container_name: spark-thriftserver
+    hostname: spark-thriftserver
+    ports:
+      - '10000:10000' # Thrift JDBC port
+      - '4042:4040' # Spark UI port
+    restart: always
+    depends_on:
+      - hive-metastore
+      - minio
+    environment:
+      - SPARK_MODE=master
+    command: >
+      /opt/bitnami/spark/sbin/start-thriftserver.sh
+      --master spark://spark-master:7077
+      --conf hive.server2.thrift.bind.host=0.0.0.0
+      --conf hive.server2.thrift.port=10000
+      --conf spark.sql.catalogImplementation=hive
+      --conf hive.metastore.uris=thrift://hive-metastore:9083
+      --conf spark.sql.warehouse.dir=s3a://warehouse/
+      --conf spark.hadoop.fs.s3a.access.key=minioadmin
+      --conf spark.hadoop.fs.s3a.secret.key=minioadmin
+      --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000
+      --conf spark.hadoop.fs.s3a.path.style.access=true
+      --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
+      --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension
+      --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+    networks:
+      - data_services
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-CU10-ubuntu-22.04
+    container_name: sqlserver
+    hostname: sqlserver
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_PID=Developer
+      - MSSQL_USER=sa
+      - MSSQL_SA_PASSWORD=YourStrong@Passw0rd
+      - MSSQL_COLLATION=SQL_Latin1_General_CP1_CI_AS
+    user: "0:0"  # ejecuta como root (igual que en el comando original)
+    ports:
+      - "1433:1433"
+    volumes:
+      - data_sqlserver:/var/opt/mssql/data
+    networks:
+      - data_services
+    restart: unless-stopped  
+
+volumes:
+  data_postgres:
+    driver: local
+    name: data_postgres
+  data_minio:
+    driver: local
+    name: data_minio
+  data_sqlserver:
+    driver: local
+    name: data_sqlserver
+
+networks:
+  data_services:
+    external: true

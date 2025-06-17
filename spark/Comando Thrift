@@ -1,0 +1,32 @@
+docker run -it -p 10000:10000 --rm --network data_services bitnami/spark:3.5.0 /bin/bash
+
+./start-thriftserver.sh \
+  --master local[*] \
+  --conf spark.sql.catalogImplementation=hive \
+  --conf hive.metastore.uris=thrift://hive-metastore:9083 \
+  --conf spark.sql.warehouse.dir=s3a://warehouse/ \
+  --conf spark.hadoop.fs.s3a.access.key=minioadmin \
+  --conf spark.hadoop.fs.s3a.secret.key=minioadmin \
+  --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+  --conf spark.hadoop.fs.s3a.path.style.access=true \
+  --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+  --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension \
+  --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog \
+  --packages io.delta:delta-spark_2.12:3.2.0,io.delta:delta-storage:3.2.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262
+
+
+./start-thriftserver.sh \
+  --master local[*] \
+  --conf hive.server2.thrift.bind.host=0.0.0.0 \
+  --conf hive.server2.thrift.port=10000 \
+  --conf spark.sql.catalogImplementation=hive \
+  --conf hive.metastore.uris=thrift://localhost:9083 \
+  --conf spark.sql.warehouse.dir=s3a://warehouse/ \
+  --conf spark.hadoop.fs.s3a.access.key=minioadmin \
+  --conf spark.hadoop.fs.s3a.secret.key=minioadmin \
+  --conf spark.hadoop.fs.s3a.endpoint=http://localhost:9000 \
+  --conf spark.hadoop.fs.s3a.path.style.access=true \
+  --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem \
+  --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension \
+  --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog \
+  --packages io.delta:delta-spark_2.12:3.2.0,io.delta:delta-storage:3.2.0,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262

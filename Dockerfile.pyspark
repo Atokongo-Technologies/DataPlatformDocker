@@ -1,0 +1,23 @@
+FROM jupyter/pyspark-notebook:spark-3.5.0
+LABEL maintainer="Miguel Manuttupa <manuttupa.ligas@gmail.com>"
+
+USER root
+
+# Variables
+ARG SPARK_VERSION=3.5.0
+ARG HADOOP_ZIP_VERSION=3.4.0
+ARG HADOOP_VERSION=3
+
+# Crear la carpeta /home/jovyan/shared
+RUN mkdir -p /home/jovyan/jars
+
+RUN pip install pymssql
+RUN pip install delta-spark==3.2.0 
+RUN pip install minio
+RUN pip install boto3
+RUN pip install pyarrow
+RUN pip install --upgrade jupyterlab 
+RUN pip install --upgrade jupyterlab-git 
+RUN pip install --upgrade sparksql-magic
+
+CMD ["start-notebook.sh", "--NotebookApp.password=''", "--NotebookApp.token=''"]
